@@ -5,7 +5,7 @@ transcriptome sequencing alongside R programming skills. While the primary focus
 complexities of maternal-fetal immunobiology, the methodologies and insights provided here are versatile and applicable across various domains of 
 scientific research. Key components of the course include:
 
-    **Transcriptome Sequencing:** Fundamental concepts and methodologies.
+    Transcriptome Sequencing: Fundamental concepts and methodologies.
     R Programming: Practical skills in R tailored to transcriptomic data analysis.
     Data Analysis Training: Hands-on exercises in analyzing microarray data, RNA-Seq, and single-cell analysis.
     Dataset Utilization: Utilizing publicly available pre-processed datasets, primarily from GEO/SRA databases.
