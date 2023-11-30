@@ -586,8 +586,8 @@ In the context of genomic analysis, such as GSEA, using these gene set collectio
 
 ```{r}
 # Loading gene sets
-hallmarks <- fgsea::gmtPathways("/home/vivischuch/class3/MSM_Rclass/hallmark.genesets.v6.1.symbols.gmt") #50 gene sets
-reactome <- fgsea::gmtPathways("/home/vivischuch/class3/MSM_Rclass/reactome.genesets.v6.1.symbols.gmt") #674
+hallmarks <- fgsea::gmtPathways("hallmark.genesets.v6.1.symbols.gmt") #50 gene sets
+reactome <- fgsea::gmtPathways("reactome.genesets.v6.1.symbols.gmt") #674
 # The `fgsea::gmtPathways` function is used to load gene sets stored in a GMT file.
 ```
 
