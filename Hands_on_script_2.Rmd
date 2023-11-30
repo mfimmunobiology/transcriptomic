@@ -1,5 +1,5 @@
 ---
-Plot of Days vs Babies: "Introduction to R - Hands-on 2"
+Title: "Introduction to R - Hands-on 2"
 author: "Viviane Schuch - vschuch@msm.edu - Johnson's Lab -  Morehouse School of Medicine"
 date: 'Compiled: `r Sys.Date()`'
 output:
