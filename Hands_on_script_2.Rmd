@@ -1,0 +1,658 @@
+---
+Plot of Days vs Babies: "Introduction to R - Hands-on 2"
+author: "Viviane Schuch - vschuch@msm.edu - Johnson's Lab -  Morehouse School of Medicine"
+date: 'Compiled: `r Sys.Date()`'
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  word_document: default
+  pdf_document: default
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{bash}
+# https://mfimmunobiology.github.io/transcriptomic/Hands_on.html
+```
+
+
+# Hands-on 2
+
+## Open Rstudio 
+**Start a New Project with Version Control**
+
+1. Click `File > New Project > Version Control`.
+
+2. Enter Repository URL: [https://github.com/mfimmunobiology/transcriptomic.git](https://github.com/mfimmunobiology/transcriptomic.git)
+
+3. Choose an empty local folder and click `Create Project`.
+
+4. Open the R script `Hands_on_script_2.Rmd` from the file pane.
+
+## Microarray analysis
+
+### Package installation setup
+
+R comes with a basic set of packages installed ('base' installation). However, for more advanced or specialized tasks, additional packages may will be required. These can be installed from CRAN or Bioconductor, which are repositories for R packages. CRAN offers a wide range of general-purpose packages, while Bioconductor provides tools specifically for bioinformatics. 
+
+```{r, message = FALSE}
+# if (!require("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# 
+# BiocManager::install("GEOquery")
+# BiocManager::install("limma")
+# BiocManager::install("mdp")
+# BiocManager::install("ComplexHeatmap")
+# BiocManager::install("ReactomePA")
+# BiocManager::install("reactome.db")
+# BiocManager::install("fgsea")
+# BiocManager::install("ComplexHeatmap")
+# 
+# install.packages("data.table")
+# install.packages("tidyverse")
+# install.packages("umap")
+# install.packages("maptools", repos="http://R-Forge.R-project.org")
+# install.packages("ggrepel")
+```
+
+
+### Library loading
+
+```{r, message = FALSE}
+# Load necessary libraries
+library(data.table)
+library(GEOquery)
+library(tidyverse)
+library(umap)
+library(maptools)  # For placing point labels without overlaps
+library(limma)
+library(mdp)
+library(fgsea)
+library(reactome.db)
+library(ComplexHeatmap)
+library(ggrepel)
+library(ggplot2)
+library(plotly)
+```
+
+**What is a GSE:**
+
+A GSE refers to a "Gene Expression Omnibus Series." It's part of the Gene Expression Omnibus (GEO), a public database hosted by the National Center for Biotechnology Information (NCBI). GEO is a repository that stores high-throughput gene expression data, as well as other types of molecular abundance data, submitted by the scientific community.
+
+https://www.ncbi.nlm.nih.gov/geo/
+
+A GSE record in GEO represents a series, which is essentially a collection of related samples. Each GSE contains descriptions of the experiment's overall design and purpose, as well as links to more detailed data about individual samples (referred to as GSM records) and the platform used for measurement (GPL records).
+
+To begin an analysis in R, one would typically start by defining the specific GSE study identifier. For example, let see the data from this paper:
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6092567/
+
+```{r}
+# Define study
+gse <- "GSE66273"  # Study identifier
+```
+
+Once the study is defined, the analysis focuses on an ExpressionSet object, a key structure in microarray data analysis from GEO datasets. This object comprises several crucial components:
+
+- **Expression Data**: The core of the ExpressionSet, containing gene expression measurements in a matrix format.
+
+- **Phenotypic Data (pData)**: Information about the samples or experimental conditions, organized in a data frame.
+
+- **Feature Data (fData)**: Detailed information about the microarray's features (genes or probes).
+
+The next step involves downloading and reading the GEO dataset into an ExpressionSet object. This is done using the GEOquery package, as shown below:
+
+```{r, message = FALSE}
+# Download and read GEO dataset into an ExpressionSet object
+eset <- getGEO(gse, GSEMatrix = TRUE)
+# View the names of objects in the ExpressionSet list
+names(eset)
+# Select the first ExpressionSet from the list
+eset_1 <- eset[[1]]
+```
+
+**Getting expression values from ExpressionSet**
+
+After obtaining the ExpressionSet, the next step is to convert the expression data into a more accessible format like a data frame. This allows for easier viewing and manipulation of the data:
+
+```{r}
+# Convert expression data from ExpressionSet to a data frame
+expr <- as.data.frame(Biobase::exprs(eset_1))
+# Display the first few rows of the expression data
+head(expr)
+```
+
+
+**Aligning Phenotype Data with ExpressionSet Columns**
+
+This step involves aligning the phenotype data with the expression data columns. This ensures that each sample's expression data corresponds correctly to its phenotypic information:
+
+
+```{r}
+# Extract phenotype data from the ExpressionSet
+phenoData_GEO_1 <- pData(eset_1)
+# Align the columns of the expression data with the phenotype data
+index <- match(colnames(expr), phenoData_GEO_1$geo_accession)
+# Reorder phenotype data to match the order in the expression data
+phenoData_GEO_1 <- phenoData_GEO_1[c(index),]
+# Check if the geo_accession in phenoData matches the column names in expr
+table(phenoData_GEO_1$geo_accession == colnames(expr))
+```
+
+**Processing and Classifying Phenotype Data in phenoData**
+
+This section of the code focuses on processing and classifying the phenotype data within the phenoData dataframe. The objective is to categorize samples into groups like 'Patient' and 'Control' for comparative analysis in transcriptomic studies.
+
+```{r}
+# Create a new column 'group' in phenoData and initialize with NA
+phenoData_GEO_1$group <- NA
+
+# Duplicate the 'title' column for further modification
+phenoData_GEO_1$title2 <- phenoData_GEO_1$title
+
+# Display the updated data frame
+print(phenoData_GEO_1$title2)
+```
+
+Regular expressions **(regex)** are used here to parse and modify the 'title' column, simplifying it for easier classification of samples. This step is crucial for accurate grouping in later analyses.
+
+```{r}
+# We will use a regular expression (regex) in R to extract the first three words from each string in the 'title2' column. 
+phenoData_GEO_1$title2 <- sub("^((\\S+\\s+){2}\\S+).*", "\\1", phenoData_GEO_1$title2)
+
+# Replace spaces in the extracted titles with underscores
+phenoData_GEO_1$title2 <- gsub(" ", "_", phenoData_GEO_1$title2)
+
+# Rename 'group' column to 'Class' and 'geo_accession' to 'Sample' for consistency
+colnames(phenoData_GEO_1)[colnames(phenoData_GEO_1) == "group"] <- "Class"
+colnames(phenoData_GEO_1)[colnames(phenoData_GEO_1) == "geo_accession"] <- "Sample"
+
+print(phenoData_GEO_1$title2)
+
+# Classify samples based on title and filter out samples with missing class
+phenoData_GEO_1 <- phenoData_GEO_1 %>% 
+  dplyr::mutate(Class = case_when(title2 %in% c("Preterm_preeclampsia_placenta")~"Patient",
+                           title2 %in% c("Preterm_control_placenta")~"Control")) %>% 
+  dplyr::filter(!is.na(Class))
+
+# Select specific columns and rearrange them
+phenoData_GEO_1 <- phenoData_GEO_1 %>% 
+  dplyr::select(Sample, Class, everything())
+```
+
+
+**Aligning and preparing expression data with sample annotations**
+
+Now, the focus shifts to aligning the expression data with the phenotype data. This alignment is vital for ensuring that each sample's expression data is correctly associated with its corresponding phenotypic information.
+
+```{r}
+# Align columns of expression data with the sample annotation
+index <- match(phenoData_GEO_1$Sample, colnames(expr))
+expr <- expr[,c(index)]
+
+# Verify alignment of Sample names in phenoData with column names in expr
+table(phenoData_GEO_1$Sample == colnames(expr))
+
+# Convert 'Class' column in phenoData to a factor
+phenoData_GEO_1$Class <- factor(phenoData_GEO_1$Class)
+# # Define group names (not used directly in the code)
+groups <- make.names(c("Control","Patient"))
+```
+
+**Convert Expression Data to a Matrix**
+
+Converting the expression data to a matrix format facilitates more efficient processing in subsequent analytical steps.
+
+```{r}
+ex <- as.matrix(expr)
+```
+
+**Box-plot**
+
+Boxplots are essential tools in transcriptomic analysis. They provide a visual summary of gene expression data, highlighting median, distribution, and variability across different samples or conditions. This step is instrumental in quality control and preliminary data assessment.
+
+```{r}
+# saving a plot as a PNG image
+# png(filename = paste0("boxplot_", gse, ".png"), width = 800, height = 600)
+
+# Order samples by their class for plotting
+ord <- order(phenoData_GEO_1$Class)
+# Set color palette for the plot
+palette(c("#1B9E77", "#7570B3", "#E7298A", "#E6AB02", "#D95F02",
+          "#66A61E", "#A6761D", "#B32424", "#B324B3", "#666666"))
+# Set plot margins
+par(mar=c(7,4,2,1))
+# Define title for the boxplot
+title <- paste0(gse, " ", " boxplot")
+# Create the boxplot with specified parameters
+boxplot(ex[,ord], boxwex=0.6, notch=T, main=title, outline=FALSE, las=2, col=phenoData_GEO_1$Class[ord])
+legend("topleft", groups, fill=palette(), bty="n")
+
+# turn off the current graphics device: 
+# dev.off()
+
+```
+
+**UMAP plot**
+
+UMAP is a technique used for dimensionality reduction and visualization in transcriptomic data analysis. It helps in uncovering patterns and relationships within complex gene expression data, aiding in the identification of clusters and batch effects.
+
+```{r, warning=FALSE}
+# Perform UMAP dimensionality reduction
+ump <- umap(t(ex), n_neighbors = 10, random_state = 123)
+
+# saving a plot as a PNG image
+# png(filename = paste0("UMAP_", gse, ".png"), width = 800, height = 600)
+
+# Set plot parameters
+par(mar=c(3,3,2,6), xpd=TRUE)
+# Plot UMAP results
+plot(ump$layout, main=paste0(gse, " ", " UMAP plot, nbrs=10"), xlab="", ylab="", col=phenoData_GEO_1$Class, pch=20, cex=4)
+# Add legend to the plot
+legend("bottomright", legend=levels(phenoData_GEO_1$Class), pch=20, col=1:nlevels(phenoData_GEO_1$Class), title="Group", pt.cex=2)
+# Place point labels using maptools
+pointLabel(ump$layout, labels = rownames(ump$layout), method="SANN", cex=1.5)
+
+# turn off the current graphics device: 
+# dev.off()
+
+```
+
+**Expression Value Distribution Analysis**
+
+Density plots offer a detailed view of gene expression distribution, crucial for understanding overall expression patterns and guiding further analysis.
+
+```{r}
+# saving a plot as a PNG image
+# png(filename = paste0("density_", gse, ".png"), width = 800, height = 600)
+
+# Set plot margins
+par(mar=c(4,4,2,1))
+# Define title for the density plot
+title <- paste0(gse, " ", " value distribution")
+# Create density plot for expression
+plotDensities(ex, group=phenoData_GEO_1$Class, main=title, legend ="topright")
+
+# turn off the current graphics device: 
+# dev.off()
+```
+
+**Expression Table Check**
+
+This step involves checking the 'expr' data frame for missing values and understanding its structure, ensuring data integrity before proceeding.
+
+```{r}
+# Check for missing values in the 'expr' data frame
+table(is.na(expr))
+# Display the structure of the 'expr' data frame, showing its dimensions, column names, and data types.
+str(expr)
+```
+
+**Extract Feature Data**
+
+Extracting feature data is necessary to associate gene expression levels with specific genes or probes, providing a deeper understanding of the data.
+
+```{r}
+feature_data <- Biobase::fData(eset_1)
+# Display the structure of 'feature_data' to understand its format and contents.
+str(feature_data)
+```
+
+**Refining Expression Data**
+
+Refining the expression data involves adding gene symbols and cleaning the data by removing entries with missing or blank gene symbols.
+
+```{r}
+# Add a new column 'GeneSymbol' to 'expr' by copying the 'GENE_SYMBOL' column from 'feature_data'.
+expr$GeneSymbol <- feature_data$GENE_SYMBOL
+# Count the number of rows (genes) in 'expr' before any data cleaning.
+nrow(expr)
+# Reorder columns in 'expr', making 'GeneSymbol' the first column, and assign the result to 'expr_gene'.
+expr_gene <- expr %>%
+  dplyr::select(GeneSymbol, everything())
+# Remove rows from 'expr_gene' where 'GeneSymbol' is blank or NA, effectively cleaning the data.
+expr_gene <- expr_gene %>% 
+  filter(GeneSymbol != "") %>%  
+  filter(!is.na(GeneSymbol))
+# Count the number of rows in 'expr_gene' after removing probes with missing or blank 'GeneSymbol'.
+nrow(expr_gene)
+```
+
+**Summarizing Expression Data by Mean**
+
+In transcriptomic datasets, it's common to encounter situations where multiple probes correspond to a single gene. To address this, one efficient approach is to summarize the expression data of duplicated genes by calculating their mean across samples. 
+
+When summarizing by mean, each gene's expression level is represented by the average of all its corresponding probes. This approach ensures that each gene is uniquely represented in the dataset.
+
+```{r}
+# Calculate the mean expression for each gene across all samples and add it as a new column 'mean_exprs'.
+expr_gene_probe_mean <- expr_gene %>%
+  mutate(mean_exprs = apply(expr_gene[,2:ncol(expr_gene)], 1, mean))
+# Group the data by 'GeneSymbol', then select the top row per group based on 'mean_exprs' value.
+expr_gene_summarized_by_mean <- expr_gene_probe_mean %>% 
+  group_by(GeneSymbol) %>% 
+  top_n(1, mean_exprs)
+# Count the number of rows in 'expr_gene_summarized_by_mean' after summarization.
+nrow(expr_gene_summarized_by_mean)
+# Remove the 'mean_exprs' column from the data, as it's no longer needed after summarization.
+expr_gene_summarized_by_mean <- expr_gene_summarized_by_mean %>% 
+  dplyr::select(-mean_exprs)
+```
+
+
+This final step involves converting the 'GeneSymbol' column into row names.
+
+```{r}
+# Convert 'GeneSymbol' into row names of 'expr_gene_summarized_by_mean'.
+expr2 <- data.frame(column_to_rownames(expr_gene_summarized_by_mean, var = "GeneSymbol"))
+# Check the names of the columns in 'expr2'.
+colnames(expr2)
+# Compare the sample names in 'phenoData_GEO_1' and column names of 'expr2' and display a summary table.
+table(phenoData_GEO_1$Sample == colnames(expr2))
+
+```
+
+**MDP R package**
+
+The MDP package quantifies the heterogeneity of transcriptomic data by calculating perturbation scores compared to control samples.
+Paper here: https://pubmed.ncbi.nlm.nih.gov/31708960/
+
+```{r}
+# saving a plot as a PNG image
+# png(filename = paste0("MDP_", gse, ".png"), width = 800, height = 600)
+
+
+# Perform MDP analysis using median as the measure, considering the top 25% most perturbed genes
+mdp_results <- mdp(data = expr2, pdata = phenoData_GEO_1, control_lab = "Control", measure = "median", fraction_genes = 0.25)
+
+# turn off the current graphics device: 
+# dev.off()
+```
+
+**Visualizing Sample Distributions Using ggplot**
+
+Following the MDP analysis, visualizing the distribution of samples across different classes (e.g., Patient vs Control) is a crucial step. This visualization helps in understanding the composition of the dataset and ensures that there is a balanced representation of each class for valid comparative analysis.
+
+The ggplot2 package in R is used for creating a bar plot that displays the frequency of each class. This plot not only shows the number of samples per class but also visually represents the balance or imbalance in sample sizes, which is vital for interpreting the results of transcriptomic analyses.
+
+```{r}
+# Create a frequency table for the 'Class' column
+class_freq <- as.data.frame(table(phenoData_GEO_1$Class))
+
+# Sort the frequency table
+class_freq <- class_freq[order(class_freq$Freq), ]
+
+
+# saving a plot as a PNG image
+# png(filename = paste0("n_samples_", gse, ".png"), width = 800, height = 600)
+
+ggplot(data = class_freq, aes(x = reorder(Var1, -Freq), y = Freq, fill = Var1)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = Freq), vjust = 0.5, hjust = 2, color = "black", size = 8) +
+  ggtitle(paste(gse)) +
+  theme_minimal() +
+  coord_flip() +
+  labs(x = "", y = "Number of Samples") +
+  theme(legend.position = "none",
+        plot.title = element_text(size = 20),      # Adjust plot title size
+        axis.title = element_text(size = 12),      # Adjust axis titles size
+        axis.text = element_text(size = 15))       # Adjust axis text size
+
+# turn off the current graphics device: 
+# dev.off()
+```
+
+## Differential expression analysis
+
+**Create a Design Matrix**
+
+The design matrix models the experimental setup. In your case, it differentiates between the patient and control groups.
+
+```{r}
+design <- model.matrix(~ Class, data=phenoData_GEO_1)
+```
+
+
+**Fit the Linear Model and Compute Statistics** 
+
+Use lmFit and eBayes functions from limma to fit the model and compute statistics for differential expression.
+
+```{r}
+fit <- lmFit(expr2, design)
+fit <- eBayes(fit)
+```
+
+
+**Extract and Summarize the Results** 
+
+Generate a list of differentially expressed genes. Adjust the p-value threshold as needed (e.g., 0.05).
+
+```{r}
+top_genes <- topTable(fit, coef=2, number=nrow(expr2), adjust.method = "BH", sort.by="P")
+```
+
+**Volcano Plot**
+
+It is a type of scatter plot commonly used in genomics to display the results of differential expression analyses. The plot shows statistical significance (P-value) versus magnitude of change (fold change), making it easy to identify genes that are significantly upregulated or downregulated.
+
+
+
+```{r}
+# saving a plot as a PNG image
+# png(filename = paste0("Volvano_basic_", gse, ".png"), width = 800, height = 600)
+
+# Initial volcano plot
+plot(top_genes$logFC, -log10(top_genes$adj.P.Val), 
+     main = "Volcano Plot", 
+     xlab = "Log Fold Change", 
+     ylab = "-Log10 Adjusted P-value", 
+     las = 1, 
+     pch = 20)
+
+# Adding horizontal line for adjusted p-value cutoff of 0.05
+abline(h = -log10(0.05), col = "blue")
+
+# Adding vertical lines for log fold change cutoffs
+abline(v = c(-1, 1), col = "blue")
+
+# Highlighting significant genes based on expression
+points(top_genes$logFC[top_genes$adj.P.Val < 0.05 & top_genes$logFC < -1], 
+       -log10(top_genes$adj.P.Val[top_genes$adj.P.Val < 0.05 & top_genes$logFC < -1]), 
+       pch = 20, col = "blue") # Downregulated genes
+
+points(top_genes$logFC[top_genes$adj.P.Val < 0.05 & top_genes$logFC > 1], 
+       -log10(top_genes$adj.P.Val[top_genes$adj.P.Val < 0.05 & top_genes$logFC > 1]), 
+       pch = 20, col = "red") # Upregulated genes
+
+# turn off the current graphics device: 
+# dev.off()
+```
+```{r}
+# saving a plot as a PNG image
+# png(filename = paste0("Volvano_", gse, ".png"), width = 800, height = 600)
+
+# Creating a data frame for ggplot
+volcano_data <- data.frame(
+  Gene = rownames(top_genes),
+  LogFC = top_genes$logFC,
+  AdjPVal = -log10(top_genes$adj.P.Val),
+  Significance = ifelse(top_genes$adj.P.Val < 0.05 & abs(top_genes$logFC) > 1, "Significant", "Not Significant")
+)
+
+# Add a new column for color coding
+volcano_data$Color <- with(volcano_data, ifelse(Significance == "Significant" & LogFC > 0, "Red",
+                                                ifelse(Significance == "Significant" & LogFC < 0, "Blue", "Grey")))
+
+# Create the volcano plot
+ggplot(volcano_data, aes(x = LogFC, y = AdjPVal)) +
+  geom_point(aes(color = Color), alpha = 0.5) +
+  scale_color_manual(values = c("Red" = "red", "Blue" = "blue", "Grey" = "grey")) +
+  geom_vline(xintercept = c(-1, 1), col = "black") +
+  geom_hline(yintercept = -log10(0.05), col = "black") +
+  geom_text_repel(
+    aes(label = ifelse(Significance == "Significant", Gene, ""), color = Color),
+    size = 4, 
+    box.padding = unit(0.45, "lines"),
+    point.padding = unit(0.4, "lines"),
+    max.overlaps = 50,
+    nudge_x = 0.3,
+    nudge_y = 0.3
+  ) +
+  theme_minimal() +
+  labs(title = "Volcano Plot", x = "Log Fold Change", y = "-Log10 Adjusted P-value") +
+  theme(legend.position = "none")  # Hide the legend
+
+# turn off the current graphics device: 
+# dev.off()
+```
+
+**Heatmap**
+
+This code filters a gene expression dataset for significant genes, creates a heatmap of these genes, and annotates it with information about the sample conditions. 
+
+```{r}
+# Setting thresholds for filtering genes
+threshold_adj_pval <- 0.05  # Adjusted p-value threshold for significance
+threshold_logFC <- 1        # Log fold change threshold for meaningful change
+
+# Filtering significant genes based on thresholds
+# Includes genes with adjusted p-value less than 0.05 and absolute log fold change greater than 1
+significant_genes <- top_genes[top_genes$adj.P.Val < threshold_adj_pval & abs(top_genes$logFC) > threshold_logFC, ]
+
+# Adding a column to indicate up (red) or down (blue) regulation for heatmap row labels
+significant_genes$RegulationColor <- ifelse(significant_genes$logFC > 0, "red", "blue")
+
+# Extracting expression data for significant genes to create the heatmap
+heatmap_data <- expr2[rownames(expr2) %in% rownames(significant_genes), ]
+
+# Converting data to a matrix format as required by the Heatmap function
+heatmap_data_matrix <- as.matrix(heatmap_data)
+
+# Defining sample conditions and their color scheme for the heatmap column annotation
+conditions <- phenoData_GEO_1$Class  # Vector of sample conditions
+condition_colors <- c("Patient" = "lightpink3", "Control" = "cyan3")  # Colors for conditions
+
+# Creating column annotation for the heatmap
+column_annotation <- HeatmapAnnotation(Groups = conditions, col = list(Groups = condition_colors))
+
+# Aligning row label colors with the order of genes in the heatmap matrix
+# This ensures that the row label colors correspond correctly to the genes in the heatmap
+aligned_row_labels_colors <- significant_genes[match(rownames(heatmap_data_matrix), rownames(significant_genes)), "RegulationColor"]
+
+# Creating the heatmap
+Heatmap(heatmap_data_matrix, 
+        name = "Expression Level",  # Title for the heatmap legend
+        show_row_names = TRUE,  # Display gene names
+        row_names_gp = gpar(col = aligned_row_labels_colors),  # Coloring gene names based on regulation
+        show_column_names = TRUE,  # Display sample names
+        top_annotation = column_annotation,  # Adding annotation for sample conditions
+        cluster_rows = TRUE,  # Clustering genes
+        cluster_columns = TRUE,  # Clustering samples
+        column_title = "Gene Expression Levels",  # Title for columns
+        row_title = "Genes")  # Title for rows
+
+```
+
+**Gene Set Enrichment Analysis**
+
+This is the preparation process for conducting Gene Set Enrichment Analysis (GSEA) using the FGSEA (Fast Gene Set Enrichment Analysis) approach.
+
+```{r}
+# Creating a data frame named 'geneList'
+geneList <- data.frame(
+  geneSymbol = rownames(top_genes),  # Replace with your gene symbols
+  statistic = top_genes$logFC        # Replace with your statistics
+)
+
+# Sort the list based on the statistic
+geneList <- geneList[order(geneList$statistic, decreasing = TRUE),]
+
+# Create a named vector for FGSEA
+rankedGenes <- setNames(geneList$statistic, geneList$geneSymbol)
+```
+
+**Gene Sets**
+
+Hallmark and Reactome
+
+The Hallmark gene sets are a collection curated as part of the Molecular Signatures Database (MSigDB) developed by the Broad Institute. These gene sets are designed to represent well-defined biological states or processes and have been refined to reduce redundancy and overlap.
+
+Reactome is a free, open-source, curated, and peer-reviewed pathway database. Its goal is to provide intuitive bioinformatics tools for the visualization, interpretation, and analysis of pathway knowledge.
+
+In the context of genomic analysis, such as GSEA, using these gene set collections can provide insights into which biological processes or pathways are significantly represented in the gene expression data. For example, if a set of genes upregulated under certain conditions significantly overlaps with a Reactome pathway, it suggests that this pathway might be active under those conditions. Similarly, the Hallmark gene sets can indicate broader biological themes or processes at play in the data.
+
+```{r}
+# Loading gene sets
+hallmarks <- fgsea::gmtPathways("/home/vivischuch/class3/MSM_Rclass/hallmark.genesets.v6.1.symbols.gmt") #50 gene sets
+reactome <- fgsea::gmtPathways("/home/vivischuch/class3/MSM_Rclass/reactome.genesets.v6.1.symbols.gmt") #674
+# The `fgsea::gmtPathways` function is used to load gene sets stored in a GMT file.
+```
+
+
+**GSEA**
+
+Using Hallmark gene sets.
+
+```{r}
+# Performing Fast Gene Set Enrichment Analysis (FGSEA) using Hallmark gene sets
+fgseaResults_H <- fgsea(pathways = hallmarks, 
+                      stats = rankedGenes, 
+                      minSize = 15,     # Minimum size of a pathway to test
+                      maxSize = 500)    # Max size of a pathway to test
+
+# Filtering and sorting the FGSEA results for significant pathways
+gsea_sig_H <- dplyr::filter(fgseaResults_H, padj <= 0.05) %>%
+  arrange(NES)
+
+# Printing the top entries of the filtered and sorted FGSEA results
+print(head(gsea_sig_H))
+
+# Creating a plot of the significant GSEA results
+p <- ggplot(gsea_sig_H, aes(NES, pathway))
+p + geom_point(aes(colour=padj, size=size)) +
+    scale_color_gradientn(colours=rainbow(4), limits=c(0, 0.05)) +
+    # geom_vline(xintercept=0, size=0.5, colour="gray50") +
+    theme(panel.background=element_rect(fill="gray95", colour="gray95"),
+          panel.grid.major=element_line(size=0.25,linetype='solid', colour="gray90"), 
+          panel.grid.minor=element_line(size=0.25,linetype='solid', colour="gray90"),
+          axis.title.y=element_blank()) +
+    expand_limits(x=c(-3,4)) +
+    # scale_x_continuous(breaks=c(-3,-2,-1,0,1,2,3, 4)) +
+    scale_y_discrete(limits=rev(gsea_sig_H$pathway))
+```
+
+**Using Reactome gene sets.**
+
+```{r}
+# Performing Fast Gene Set Enrichment Analysis (FGSEA) using Reactome gene sets
+fgseaResults_R <- fgsea(pathways = reactome, 
+                      stats = rankedGenes, 
+                      minSize = 15,     # Minimum size of a pathway to test
+                      maxSize = 500)    # Number of permutations
+
+
+# Filtering and sorting the FGSEA results for significant pathways
+gsea_sig_R <- dplyr::filter(fgseaResults_R, padj <= 0.05) %>%
+  arrange(NES)
+
+# Printing the top entries of the filtered and sorted FGSEA results
+print(head(gsea_sig_R))
+
+# Creating a plot of the significant GSEA results
+p <- ggplot(gsea_sig_R, aes(NES, pathway))
+p + geom_point(aes(colour=padj, size=size)) +
+    scale_color_gradientn(colours=rainbow(4), limits=c(0, 0.05)) +
+    # geom_vline(xintercept=0, size=0.5, colour="gray50") +
+    theme(panel.background=element_rect(fill="gray95", colour="gray95"),
+          panel.grid.major=element_line(size=0.25,linetype='solid', colour="gray90"), 
+          panel.grid.minor=element_line(size=0.25,linetype='solid', colour="gray90"),
+          axis.title.y=element_blank()) +
+    expand_limits(x=c(-3,4)) +
+    # scale_x_continuous(breaks=c(-3,-2,-1,0,1,2,3, 4)) +
+    scale_y_discrete(limits=rev(gsea_sig_R$pathway))
+```
+
+
